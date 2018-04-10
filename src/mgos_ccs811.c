@@ -68,6 +68,7 @@ static bool mgos_ccs811_reset(struct mgos_ccs811 *sensor) {
   }
   return mgos_i2c_write(sensor->i2c, sensor->i2caddr, data, 5, true);
 }
+
 // Private functions end
 
 // Public functions follow
@@ -100,12 +101,12 @@ struct mgos_ccs811 *mgos_ccs811_create(struct mgos_i2c *i2c, uint8_t i2caddr) {
   mgos_ccs811_reset(sensor);
   mgos_usleep(12000);
 
-  uint8_t cmd        = MGOS_CCS811_BOOTLOADER_REG_APP_START;
+  uint8_t cmd = MGOS_CCS811_BOOTLOADER_REG_APP_START;
   mgos_i2c_write(sensor->i2c, sensor->i2caddr, &cmd, 1, true);
   mgos_usleep(72000);
 
   // Read status (expecting FW_MODE to be set and ERR to be clear)
-  uint8_t status     = MGOS_CCS811_STATUS_ERR;
+  uint8_t status = MGOS_CCS811_STATUS_ERR;
   mgos_ccs811_getStatus(sensor, &status);
   if (!(status & MGOS_CCS811_STATUS_FW_MODE) || (status & MGOS_CCS811_STATUS_ERR)) {
     LOG(LL_ERROR, ("CCS811 invalid firmware mode, and/or status error (0x%02x)", status));

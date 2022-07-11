@@ -21,6 +21,26 @@
 // Datasheet:
 // https://ams.com/eng/content/download/951091/2269479/file/CCS811_DS000459_4-00.pdf
 
+bool i2c_read_reg_n(struct mgos_i2c *conn, uint16_t addr, uint8_t reg,
+                         size_t n, uint8_t *buf) {
+  const bool wres = mgos_i2c_write(conn, addr, &reg, 1, false /* stop */);
+#if CS_PLATFORM == CS_P_ESP8266
+  // NOTE Needed for ESP8266 because it doesn't handle I2C clock stretch correctly
+  mgos_usleep(50);
+#endif // CS_PLATFORM == CS_P_ESP8266
+  const bool rres = mgos_i2c_read(conn, addr, buf, n, true /* stop */);
+
+  return wres && rres;
+}
+
+int i2c_read_reg_b(struct mgos_i2c *conn, uint16_t addr, uint8_t reg) {
+  uint8_t value;
+  if (!i2c_read_reg_n(conn, addr, reg, 1, &value)) {
+    return -1;
+  }
+  return value;
+}
+
 // Private functions follow
 static bool mgos_ccs811_getStatus(struct mgos_ccs811 *sensor, uint8_t *status) {
   int ret;
@@ -28,7 +48,7 @@ static bool mgos_ccs811_getStatus(struct mgos_ccs811 *sensor, uint8_t *status) {
   if (!sensor) {
     return false;
   }
-  ret = mgos_i2c_read_reg_b(sensor->i2c, sensor->i2caddr, MGOS_CCS811_REG_STATUS);
+  ret = i2c_read_reg_b(sensor->i2c, sensor->i2caddr, MGOS_CCS811_REG_STATUS);
   if (ret < 0) {
     return false;
   }
@@ -42,7 +62,7 @@ static bool mgos_ccs811_getMeasMode(struct mgos_ccs811 *sensor, uint8_t *meas_mo
   if (!sensor) {
     return false;
   }
-  ret = mgos_i2c_read_reg_b(sensor->i2c, sensor->i2caddr, MGOS_CCS811_REG_MEAS_MODE);
+  ret = i2c_read_reg_b(sensor->i2c, sensor->i2caddr, MGOS_CCS811_REG_MEAS_MODE);
   if (ret < 0) {
     return false;
   }
@@ -81,7 +101,7 @@ struct mgos_ccs811 *mgos_ccs811_create(struct mgos_i2c *i2c, uint8_t i2caddr) {
     return NULL;
   }
 
-  ret = mgos_i2c_read_reg_b(i2c, i2caddr, MGOS_CCS811_REG_HW_ID);
+  ret = i2c_read_reg_b(i2c, i2caddr, MGOS_CCS811_REG_HW_ID);
   if (ret != MGOS_CCS811_HW_ID_CODE) {
     LOG(LL_ERROR, ("Failed to detect CCS811 at I2C 0x%02x", i2caddr));
     return NULL;
@@ -98,7 +118,10 @@ struct mgos_ccs811 *mgos_ccs811_create(struct mgos_i2c *i2c, uint8_t i2caddr) {
   sensor->eco2    = 400;
 
   // Boot the application on CCS811.
-  mgos_ccs811_reset(sensor);
+  if (!mgos_ccs811_reset(sensor)) {
+    LOG(LL_ERROR, ("CCS811 failed to reset device"));
+    goto exit;
+  }
   mgos_usleep(12000);
 
   uint8_t cmd = MGOS_CCS811_BOOTLOADER_REG_APP_START;
@@ -107,7 +130,10 @@ struct mgos_ccs811 *mgos_ccs811_create(struct mgos_i2c *i2c, uint8_t i2caddr) {
 
   // Read status (expecting FW_MODE to be set and ERR to be clear)
   uint8_t status = MGOS_CCS811_STATUS_ERR;
-  mgos_ccs811_getStatus(sensor, &status);
+  if (!mgos_ccs811_getStatus(sensor, &status)) {
+    LOG(LL_ERROR, ("CCS811 failed to get status"));
+    goto exit;
+  }
   if (!(status & MGOS_CCS811_STATUS_FW_MODE) || (status & MGOS_CCS811_STATUS_ERR)) {
     LOG(LL_ERROR, ("CCS811 invalid firmware mode, and/or status error (0x%02x)", status));
     goto exit;
@@ -115,10 +141,17 @@ struct mgos_ccs811 *mgos_ccs811_create(struct mgos_i2c *i2c, uint8_t i2caddr) {
 
   // Set Drive Mode (1s samples)
   uint8_t drive_mode = CCS811_DRIVE_MODE_IDLE;
-  mgos_ccs811_setDriveMode(sensor, CCS811_DRIVE_MODE_1SEC);
   mgos_usleep(5000);
+  if(!mgos_ccs811_setDriveMode(sensor, CCS811_DRIVE_MODE_1SEC)) {
+    LOG(LL_ERROR, ("CCS811 mgos_ccs811_setDriveMode() failed"));
+    goto exit;
+  }
+  mgos_usleep(72000);
 
-  mgos_ccs811_getDriveMode(sensor, &drive_mode);
+  if(!mgos_ccs811_getDriveMode(sensor, &drive_mode)) {
+    LOG(LL_ERROR, ("CCS811 mgos_ccs811_getDriveMode() failed"));
+    goto exit;
+  }
   if (drive_mode != CCS811_DRIVE_MODE_1SEC) {
     LOG(LL_ERROR, ("CCS811 failed to set drive mode"));
     goto exit;
